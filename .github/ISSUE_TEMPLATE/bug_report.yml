@@ -1,0 +1,45 @@
+name: 问题反馈
+description: 报告可复现的安装、欢迎或播放问题
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "不要上传 Cookie、密钥、真实观众名单或未脱敏日志。抖音接入仍为实验性。"
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: Windows、Python、浏览器版本和项目 commit
+    validations:
+      required: true
+  - type: dropdown
+    id: scenario
+    attributes:
+      label: 问题环节
+      options:
+        - 安装与启动
+        - 本地模拟欢迎
+        - 角色或声音
+        - 直播软件采集
+        - 实验性抖音桥接
+        - 文档或其他
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 包括角色窗口数量、声音启用状态及模拟 ID
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 预期结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 脱敏错误或截图
+      description: 只提供相关片段，不要上传整个 data 目录

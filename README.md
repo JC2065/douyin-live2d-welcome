@@ -1,69 +1,114 @@
-# 直播欢迎助手
+# Live2D 直播欢迎助手
 
-昵称语音、Live2D 欢迎气泡、独立观众 60 秒冷却。当前版本为 **本地模拟可运行，真实抖音接入待验证**。
+[![Python tests](https://github.com/JC2065/douyin-live2d-welcome/actions/workflows/tests.yml/badge.svg)](https://github.com/JC2065/douyin-live2d-welcome/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/code-MIT-blue.svg)](LICENSE)
 
-## 首次安装（Windows）
+**让直播间的小助手念出观众昵称，用 Live2D 动作和对话气泡迎接每次到来。**
 
-安装 Python 3.12 和 Git；可选的抖音连接器还需要 Node.js。克隆本仓库后，在 PowerShell 中执行：
+面向技术直播的轻量本地工具：中文欢迎语、音量驱动嘴型，以及按观众 ID 独立计算的 60 秒冷却。使用固定模板，无需大模型 API Key。
+
+> **早期预览版本。** 本地模拟欢迎已验证；真实抖音进房、直播伴侣采集和收音尚未验证。实验性桥接不等于开箱即用的抖音场控产品。本项目不是抖音官方工具。
+
+[安装与排障](docs/GETTING_STARTED.md) · [实现与接口](docs/ARCHITECTURE.md) · [抖音接入状态](docs/DOUYIN.md) · [贡献指南](CONTRIBUTING.md)
+
+## 欢迎效果
+
+```text
+小明进入 → 获准欢迎 → 生成语音 → 角色动作 + 欢迎气泡 + 嘴型
+                                  「欢迎小明，一起探索技术吧！」
+同一 ID 在 60 秒内再次进入 → 忽略，不延长冷却
+同一 ID 满 60 秒后再次进入 → 重新欢迎
+```
+
+## 功能与状态
+
+| 能力 | 当前状态 |
+| --- | --- |
+| 模拟观众进房、按 ID 冷却 | 可用，精确 60 秒边界与不同 ID 已有单元测试 |
+| Live2D、气泡、中文语音、嘴型 | 本地浏览器流程已验证，默认 Haru 示例角色 |
+| 暂停欢迎、独立角色窗口 | 已实现，只允许一个活动播放窗口 |
+| 绿幕与透明网页 | 已提供，直播软件采集效果待验证 |
+| 抖音进房桥接 | 实验性，依赖未随仓库分发的连接器 |
+| AI 聊天、主播讲话自动避让 | 未实现，不监听麦克风 |
+
+## 快速开始
+
+需要 **Windows、Python 3.12（含 `py` 启动器）、Git、支持 WebGL 的现代浏览器**。安装素材与在线语音需要网络。Node.js 仅用于可选桥接或 UI 测试。
 
 ```powershell
-# 先阅读 THIRD_PARTY.md 中的 Live2D 运行库和模型条款
-powershell -ExecutionPolicy Bypass -File .\setup.ps1 -AcceptLive2DTerms
+git clone https://github.com/JC2065/douyin-live2d-welcome.git
+cd douyin-live2d-welcome
+
+# 先阅读 THIRD_PARTY.md 链接的 Live2D 运行库与示例模型条款。
+# 此参数表示你已阅读并接受适用条款。
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1 -AcceptLive2DTerms
 .\start.cmd
 ```
 
-本仓库原创代码采用 [MIT](LICENSE)；Live2D Core、模型与第三方依赖有独立条款，详见 [THIRD_PARTY.md](THIRD_PARTY.md)。安装脚本从上游下载素材。仓库不包含模型、运行库、观众数据、语音缓存或本机环境。
+打开 [本地控制台](http://127.0.0.1:18765/)：
 
-本地地址：http://127.0.0.1:18765 。双击 `start.cmd` 启动服务并打开控制台。
+1. 等待角色加载，点击 **启用欢迎声音**。
+2. 点击 **模拟进房**，观察气泡并试听欢迎语。
+3. 用相同 ID 再点一次，确认冷却；满 60 秒后重试。
+4. 点击 **换一个观众**，验证独立触发。
 
-## 当前部署
+安装脚本已做语法检查，尚未完成全新 Windows 环境端到端安装验证。遇到问题查看 [排障指南](docs/GETTING_STARTED.md)。
 
-- 本地模拟模式，不连接抖音，不发送评论，不自动开播。
-- Live2D Haru 示例角色、欢迎气泡、Edge TTS 中文语音、音量驱动嘴型。
-- 同一观众 ID 以最近一次获准欢迎的时间为基准：小于 60 秒忽略，大于等于 60 秒再次进房允许欢迎。忽略事件不刷新时间；不同 ID 独立计时。
-- 冷却保存在当前服务进程内，重启后重置。语音和气泡排队播放；没有启用角色窗口时不接收欢迎，暂停期间不计入冷却。
-- 欢迎使用固定模板，无需大模型密钥。在线语音需联网；失败时尝试浏览器中文语音，失败会在角色窗口显示。
+## 冷却规则
 
-## 使用
+冷却从服务端 **接受欢迎请求** 时开始，而不是声音播放结束。相同昵称、不同 ID 被视为不同观众。
 
-1. 双击 `start.cmd`。
-2. 点击角色上的「启用欢迎声音」。
-3. 点击「模拟进房」；重复点击验证 60 秒冷却。点「换一个观众」测试独立欢迎。
-4. 「打开独立角色窗口」会停止控制台的预览，避免双重声音。新窗口再次启用声音。
-5. 独立角色窗口默认绿幕：http://127.0.0.1:18765/overlay?green=1 。透明页面：http://127.0.0.1:18765/overlay 。
-6. 直播伴侣实际采集待开播前确认：尝试窗口采集，绿幕画面需要配置对应的色键；如版本支持网页源，可尝试透明页面。仅网页透明不等于窗口采集支持透明。音频需确认直播伴侣采集到浏览器输出，避免重复收音。
+| 时间（同一 ID） | 结果 |
+| --- | --- |
+| 第 0 秒进入 | 接受欢迎，开始计时 |
+| 第 30 秒再次进入 | 忽略，仍从第 0 秒计时 |
+| 第 59.999 秒再次进入 | 忽略 |
+| 第 60 秒再次进入 | 接受欢迎，重新计时 |
 
-「暂停欢迎」会停止当前播放并清空待播事件。不会检测主播麦克风，所以不能自动避让主播讲话。
+没有就绪的播放窗口、暂停或待处理队列已满时，请求不会进入冷却。冷却保存在内存中，重启后重置。接受请求不保证最终发声：语音错误、暂停、过期或拥堵都可能导致跳过。
 
-## 以后连接抖音
+## 直播软件接入
 
-可选桥接依赖上游连接器，不随本仓库分发，也不在首次安装时自动下载。检查上游许可与适用条件后，可自行将对应版本放到 `vendor/douyin-ai-assist`；当前桥接为实验性功能。缺少该目录时只能运行本地模拟。上游连接代码需启用 TLS 验证并设置 HTTP 超时，详见 THIRD_PARTY.md。
+控制台的 **打开独立角色窗口** 默认使用绿幕，同时关闭内嵌预览，防止重复播放。
 
-在本目录终端运行：
+| 页面 | 本地地址 |
+| --- | --- |
+| 控制台 | `http://127.0.0.1:18765/` |
+| 透明角色页面 | `http://127.0.0.1:18765/overlay` |
+| 绿幕角色页面 | `http://127.0.0.1:18765/overlay?green=1` |
+
+绿幕需要直播软件支持窗口采集与色键；透明页面需要相应网页源支持。网页透明不代表窗口采集后透明，浏览器发声也不代表直播音轨已收录。先录制短片确认画面、音量和重复收音。详见 [使用指南](docs/GETTING_STARTED.md)。
+
+## 开发与验证
+
+核心测试不依赖网络、Live2D 或第三方 Python 包：
 
 ```powershell
-.\.venv\Scripts\python.exe connect_douyin.py 你的数字直播间号
+py -3.12 -m unittest test_welcome -v
 ```
 
-该桥接脚本只在手动运行时连接；目前未运行、未验证真实直播间。控制台的「本地模拟」标签描述本地服务，本版本尚未集成桥接进程状态。抖音连接使用上游非官方接口，收到的事件不保证覆盖每个观众。上游签名参数有历史固定值，正式使用前需要真实开播验证或升级连接器。
-
-## 验证
+UI 测试需要运行中的服务、素材、Microsoft Edge，并先关闭其他角色窗口：
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest test_welcome -v
-node verify-ui.cjs
+npm install
+npm run test:ui
 ```
 
-UI 测试前先运行 `npm install` 安装 Playwright，并确保本机已安装 Microsoft Edge、欢迎服务已启动。
+GitHub Actions 当前只运行冷却测试。UI 测试检查模型、气泡、播放结束回调、冷却与暂停，不证明真实直播事件或音轨采集有效。[架构与测试边界](docs/ARCHITECTURE.md)
 
-边界测试覆盖 59.999 / 60 / 119 / 120 秒、不同观众与缺失 ID。UI 验证使用本机 Edge，验证模型加载、气泡、语音播放结束回调、重复进入和暂停。浏览器播放回调不代表直播伴侣音轨已录到声音。
+## 数据与许可
 
-## 来源与素材
+- 默认只监听 `127.0.0.1:18765`，无开机自启；不要直接暴露到公网。
+- 欢迎文字包含处理后的昵称，会发送至 Edge TTS。浏览器语音回退也可能联网。
+- 本地音频保存在 `data/audio/`，清理策略约保留最新 200 个 MP3；详见 [数据说明](SECURITY.md)。
+- 原创代码采用 **[MIT](LICENSE)**。Live2D Core、Haru 模型及其他依赖有独立条款，不属于本仓库 MIT 授权。第三方资产不会随仓库分发。
 
-- 抖音连接器：https://github.com/Primusse/douyin-ai-assist ，本地版本 `417e21474f278222a0d809ff9b15a8068e80b31b`。欢迎服务与界面为本目录独立实现。
-- Live2D 渲染：https://github.com/guansss/pixi-live2d-display ，运行版 0.4.0，PixiJS 6.5.10。
-- Haru 示例来自该仓库 `31317b37d5e22955a44d5b11f37f421e94a11269` 的 test/assets/haru；移除了示例动作附带的无关声音。
-- Live2D Core 来自 https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js 。示例模型条款保存在 `web/models/LICENSE-Live2D.md`，角色为 Live2D 官方示例，并非原创角色。相关使用范围按其条款；后续可替换自己有授权的模型。
-- `data/preview.png` 为本地运行截图，`data/audio/` 为欢迎语音缓存（最多保留约 200 个文件）。日志为本地运行日志。
+This content uses sample data owned and copyrighted by Live2D Inc. The sample data are utilized in accordance with terms and conditions set by Live2D Inc. This content itself is created at the author's sole discretion.
 
-服务仅绑定 127.0.0.1，无开机自启。依赖锁定在 requirements-lock.txt。
+来源与条款见 [THIRD_PARTY.md](THIRD_PARTY.md)。感谢 [pixi-live2d-display](https://github.com/guansss/pixi-live2d-display)、[PixiJS](https://github.com/pixijs/pixijs)、[edge-tts](https://github.com/rany2/edge-tts) 及实验性连接器 [douyin-ai-assist](https://github.com/Primusse/douyin-ai-assist)。
+
+## 参与项目
+
+欢迎可复现的问题、文档修正和小范围 PR。请阅读 [贡献指南](CONTRIBUTING.md)，使用 [Issue 模板](https://github.com/JC2065/douyin-live2d-welcome/issues/new/choose)。敏感问题参照 [安全说明](SECURITY.md)。
+
+[变更记录](CHANGELOG.md) · [计划与限制](docs/ROADMAP.md)
