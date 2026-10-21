@@ -13,11 +13,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from welcome import WelcomeGate
 from douyin_bridge import DouyinBridge
+from welcome_phrases import WelcomePhrases
 
 ROOT = Path(__file__).resolve().parent
 AUDIO = ROOT / 'data/audio'
 AUDIO.mkdir(parents=True, exist_ok=True)
 gate = WelcomeGate(60)
+phrases = WelcomePhrases()
 logs = deque(maxlen=80)
 pending = asyncio.Queue(maxsize=20)
 events = deque(maxlen=40)
@@ -124,7 +126,7 @@ async def enter(body: Entry):
         log(f'{body.name} 重复进房：忽略，剩余 {remaining} 秒')
         return {'accepted': False, 'remaining': remaining, 'reason': f'60 秒内重复进入，剩余 {remaining} 秒'}
     name = ''.join(c for c in body.name if c.isalnum() or c in ' _-')[:20].strip() or '新朋友'
-    text = f'欢迎{name}，一起探索技术吧！'
+    text = phrases.next(name)
     pending.put_nowait({'id': uuid.uuid4().hex, 'text': text, 'name': name, 'generation': generation,
                        'received': time.time(), 'source': body.source})
     log(f'{"真实进房" if body.source == "douyin" else "模拟进房"} · {name}：加入欢迎队列')
@@ -137,7 +139,7 @@ def status():
     labels = {'idle': '本地模拟 · 未连接抖音', 'resolving': '正在解析分享链接', 'connecting': '正在连接抖音',
               'connected': '抖音已连接 · 监听真实进房', 'reconnecting': '抖音断线 · 正在重连',
               'stopping': '正在断开抖音', 'ended': '直播已结束', 'error': '抖音连接失败'}
-    return {'server_id': server_id, 'playback': last_playback, 'mode': labels.get(info['state'], info['state']), 'connection': info, 'cooldown': 60, 'muted': muted, 'seq': sequence,
+    return {'server_id': server_id, 'preset_count': len(phrases.templates), 'playback': last_playback, 'mode': labels.get(info['state'], info['state']), 'connection': info, 'cooldown': 60, 'muted': muted, 'seq': sequence,
             'player': time.monotonic()-last_player < 5, 'logs': list(logs), 'queued': pending.qsize()}
 
 
