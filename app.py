@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from welcome import WelcomeGate
+from douyin_bridge import DouyinBridge
 
 ROOT = Path(__file__).resolve().parent
 AUDIO = ROOT / 'data/audio'
@@ -25,6 +26,9 @@ muted = False
 generation = 0
 last_player = 0.0
 player_id = None
+server_id = uuid.uuid4().hex
+last_playback = None
+bridge = None
 
 
 def log(message):
@@ -36,6 +40,8 @@ async def worker():
     while True:
         item = await pending.get()
         try:
+            if item['generation'] != generation or muted or time.time()-item['received'] > 25:
+                continue
             key = hashlib.sha256(item['text'].encode()).hexdigest()[:24]
             path = AUDIO / (key + '.mp3')
             if not path.exists():
@@ -46,10 +52,10 @@ async def worker():
                 except Exception as exc:
                     tmp.unlink(missing_ok=True)
                     log('在线语音不可用，将尝试浏览器语音：' + type(exc).__name__)
-            if item['generation'] != generation or muted:
+            if item['generation'] != generation or muted or time.time()-item['received'] > 25:
                 continue
             sequence += 1
-            events.append(dict(item, seq=sequence, audio=f'/audio/{key}.mp3' if path.exists() else None, created=time.time()))
+            events.append(dict(item, seq=sequence, audio=f'/audio/{key}.mp3' if path.exists() else None, created=item['received']))
             log('准备播放：' + item['text'])
             # Cache is bounded; no indefinite accumulation of viewer names/audio.
             for old in sorted(AUDIO.glob('*.mp3'), key=lambda p:p.stat().st_mtime, reverse=True)[200:]:
@@ -60,10 +66,27 @@ async def worker():
 
 @asynccontextmanager
 async def lifespan(app):
+    global bridge
+    loop = asyncio.get_running_loop()
+    async def live_enter(uid, name):
+        result = await enter(Entry(uid=uid, name=name, source='douyin'))
+        bridge.record_result(result['accepted'])
+    def on_entry(uid, name):
+        future = asyncio.run_coroutine_threadsafe(live_enter(uid, name), loop)
+        def done(f):
+            if not f.cancelled() and f.exception():
+                log('真实进房处理失败：' + type(f.exception()).__name__)
+        future.add_done_callback(done)
+    bridge = DouyinBridge(on_entry, log)
     task = asyncio.create_task(worker())
     log('本地模拟模式已启动，未连接抖音。')
     yield
+    bridge.stop()
     task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(lifespan=lifespan)
@@ -85,6 +108,7 @@ async def local_only(request: Request, call_next):
 class Entry(BaseModel):
     uid: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=30)
+    source: str = 'simulation'
 
 
 @app.post('/api/enter')
@@ -101,14 +125,19 @@ async def enter(body: Entry):
         return {'accepted': False, 'remaining': remaining, 'reason': f'60 秒内重复进入，剩余 {remaining} 秒'}
     name = ''.join(c for c in body.name if c.isalnum() or c in ' _-')[:20].strip() or '新朋友'
     text = f'欢迎{name}，一起探索技术吧！'
-    pending.put_nowait({'id': uuid.uuid4().hex, 'text': text, 'name': name, 'generation': generation})
-    log(f'{name} 进入：加入欢迎队列')
+    pending.put_nowait({'id': uuid.uuid4().hex, 'text': text, 'name': name, 'generation': generation,
+                       'received': time.time(), 'source': body.source})
+    log(f'{"真实进房" if body.source == "douyin" else "模拟进房"} · {name}：加入欢迎队列')
     return {'accepted': True, 'text': text}
 
 
 @app.get('/api/status')
 def status():
-    return {'mode': '本地模拟 · 未连接抖音', 'cooldown': 60, 'muted': muted, 'seq': sequence,
+    info = bridge.snapshot() if bridge else {'state': 'idle'}
+    labels = {'idle': '本地模拟 · 未连接抖音', 'resolving': '正在解析分享链接', 'connecting': '正在连接抖音',
+              'connected': '抖音已连接 · 监听真实进房', 'reconnecting': '抖音断线 · 正在重连',
+              'stopping': '正在断开抖音', 'ended': '直播已结束', 'error': '抖音连接失败'}
+    return {'server_id': server_id, 'playback': last_playback, 'mode': labels.get(info['state'], info['state']), 'connection': info, 'cooldown': 60, 'muted': muted, 'seq': sequence,
             'player': time.monotonic()-last_player < 5, 'logs': list(logs), 'queued': pending.qsize()}
 
 
@@ -117,20 +146,65 @@ def poll(after: int = 0, client: str = ''):
     global last_player, player_id
     now = time.monotonic()
     if not client or (player_id and player_id != client and now-last_player < 5):
-        return {'events': [], 'muted': muted, 'busy': True}
+        return {'server_id': server_id, 'events': [], 'muted': muted, 'busy': True}
     player_id, last_player = client, now
-    return {'events': [e for e in events if e['seq'] > after and time.time()-e['created'] < 45 and e['generation']==generation], 'muted': muted, 'busy': False}
+    return {'server_id': server_id, 'events': [e for e in events if e['seq'] > after and time.time()-e['created'] < 45 and e['generation']==generation], 'muted': muted, 'busy': False}
 
 
 @app.post('/api/mute')
-def mute():
+async def mute():
     global muted, generation
     muted = not muted
     if muted:
         generation += 1
         events.clear()
+        while not pending.empty():
+            try:
+                pending.get_nowait()
+                pending.task_done()
+            except asyncio.QueueEmpty:
+                break
     log('欢迎已暂停' if muted else '欢迎已恢复')
     return {'muted': muted}
+
+
+class ConnectionInput(BaseModel):
+    room: str = Field(min_length=5, max_length=3000)
+
+
+class PlaybackReport(BaseModel):
+    client: str = Field(min_length=1, max_length=80)
+    event: str = Field(min_length=1, max_length=80)
+    phase: str = Field(pattern='^(started|finished|failed)$')
+
+
+@app.post('/api/playback')
+async def playback_report(body: PlaybackReport):
+    global last_playback
+    if body.client != player_id or time.monotonic()-last_player > 5:
+        raise HTTPException(status_code=409, detail='播放窗口已失去租约')
+    event = next((e for e in events if e['id'] == body.event), None)
+    if event is None:
+        raise HTTPException(status_code=404, detail='欢迎事件已过期')
+    last_playback = {'phase': body.phase, 'time': time.time(), 'source': event['source']}
+    labels = {'started': '开始播放', 'finished': '浏览器播放完成', 'failed': '浏览器播放失败'}
+    log(labels[body.phase] + '：' + event['text'])
+    return {'ok': True}
+
+
+@app.post('/api/connection/start')
+async def connection_start(body: ConnectionInput):
+    try:
+        bridge.start(body.room)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return bridge.snapshot()
+
+
+@app.post('/api/connection/stop')
+async def connection_stop():
+    bridge.stop()
+    return bridge.snapshot()
 
 
 @app.get('/')
