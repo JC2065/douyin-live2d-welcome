@@ -14,12 +14,14 @@ from pydantic import BaseModel, Field
 from welcome import WelcomeGate
 from douyin_bridge import DouyinBridge
 from welcome_phrases import WelcomePhrases
+from room_binding import RoomBinding
 
 ROOT = Path(__file__).resolve().parent
 AUDIO = ROOT / 'data/audio'
 AUDIO.mkdir(parents=True, exist_ok=True)
 gate = WelcomeGate(60)
 phrases = WelcomePhrases()
+binding = RoomBinding(ROOT/'data/room-binding.json')
 logs = deque(maxlen=80)
 pending = asyncio.Queue(maxsize=20)
 events = deque(maxlen=40)
@@ -82,6 +84,10 @@ async def lifespan(app):
     bridge = DouyinBridge(on_entry, log)
     task = asyncio.create_task(worker())
     log('本地模拟模式已启动，未连接抖音。')
+    saved_room = binding.load()
+    if saved_room:
+        bridge.start(saved_room)
+        log('正在自动连接已绑定的直播间。')
     yield
     bridge.stop()
     task.cancel()
@@ -139,7 +145,7 @@ def status():
     labels = {'idle': '本地模拟 · 未连接抖音', 'resolving': '正在解析分享链接', 'connecting': '正在连接抖音',
               'connected': '抖音已连接 · 监听真实进房', 'reconnecting': '抖音断线 · 正在重连',
               'stopping': '正在断开抖音', 'ended': '直播已结束', 'error': '抖音连接失败'}
-    return {'server_id': server_id, 'preset_count': len(phrases.templates), 'playback': last_playback, 'mode': labels.get(info['state'], info['state']), 'connection': info, 'cooldown': 60, 'muted': muted, 'seq': sequence,
+    return {'bound_room': binding.load(), 'server_id': server_id, 'preset_count': len(phrases.templates), 'playback': last_playback, 'mode': labels.get(info['state'], info['state']), 'connection': info, 'cooldown': 60, 'muted': muted, 'seq': sequence,
             'player': time.monotonic()-last_player < 5, 'logs': list(logs), 'queued': pending.qsize()}
 
 
@@ -207,6 +213,23 @@ async def connection_start(body: ConnectionInput):
 async def connection_stop():
     bridge.stop()
     return bridge.snapshot()
+
+
+@app.post('/api/connection/bind')
+async def bind_room():
+    info = bridge.snapshot()
+    if info['state'] != 'connected':
+        raise HTTPException(status_code=400, detail='请先成功连接直播间，再绑定')
+    binding.save(info['room'])
+    log('已记住直播间，下次启动自动连接。')
+    return {'bound_room': info['room']}
+
+
+@app.post('/api/connection/unbind')
+async def unbind_room():
+    binding.clear()
+    log('已取消直播间绑定，当前连接继续运行。')
+    return {'bound_room': ''}
 
 
 @app.get('/')
