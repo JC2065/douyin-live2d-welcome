@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+data/
+vendor/
+web/assets/
+web/models/
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
