@@ -2,6 +2,11 @@
   "name": "douyin-live2d-welcome",
   "version": "0.1.0",
   "private": true,
-  "scripts": { "test:ui": "node verify-ui.cjs" },
-  "devDependencies": { "playwright": "1.58.2" }
+  "scripts": {
+    "test:ui": "node verify-ui.cjs",
+    "test:audio": "node verify-audio-delivery.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.58.2"
+  }
 }

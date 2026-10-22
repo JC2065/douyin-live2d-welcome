@@ -15,6 +15,9 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         server.generation = 0
         server.last_player = 0
         server.player_id = None
+        server.player_ready = False
+        server.diagnostics.clear()
+        server.last_playback = None
 
     async def test_unready_player_does_not_start_cooldown(self):
         entry = server.Entry(uid='user', name='同学')
@@ -36,7 +39,7 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await server.enter(server.Entry(uid='another',name='同学')))['accepted'])
 
     async def test_stale_items_do_not_call_tts(self):
-        await server.pending.put({'generation':0, 'received':time.time()-26})
+        await server.pending.put({'generation':0, 'received':time.time()-121})
         with patch('app.edge_tts.Communicate') as tts:
             task=asyncio.create_task(server.worker())
             await server.pending.join()
@@ -48,12 +51,12 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             tts.assert_not_called()
 
     async def test_player_lease_and_restart_identifier(self):
-        first = server.poll(client='first')
+        first = await server.poll(client='first')
         self.assertFalse(first['busy'])
         self.assertEqual(first['server_id'],server.server_id)
-        self.assertTrue(server.poll(client='second')['busy'])
-        server.last_player-=6
-        self.assertFalse(server.poll(client='second')['busy'])
+        self.assertTrue((await server.poll(client='second'))['busy'])
+        server.last_player-=31
+        self.assertFalse((await server.poll(client='second'))['busy'])
 
     async def test_full_queue_does_not_consume_cooldown(self):
         server.last_player = time.monotonic()
@@ -64,6 +67,17 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         server.pending.get_nowait()
         server.pending.task_done()
         self.assertTrue((await server.enter(entry))['accepted'])
+
+    async def test_explicit_audio_button_can_take_over_old_window(self):
+        await server.poll(client='old')
+        self.assertTrue((await server.poll(client='new'))['busy'])
+        await server.player_claim(server.PlayerClaim(client='new'))
+        self.assertFalse((await server.poll(client='new'))['busy'])
+        self.assertTrue((await server.poll(client='old'))['busy'])
+        await server.player_release(server.PlayerClaim(client='old'))
+        self.assertEqual(server.player_id,'new')
+        await server.player_release(server.PlayerClaim(client='new'))
+        self.assertIsNone(server.player_id)
 
 if __name__=='__main__':
     unittest.main()

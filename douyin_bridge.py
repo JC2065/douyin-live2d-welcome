@@ -8,9 +8,10 @@ from room_links import resolve_room, member_identity
 
 
 class DouyinBridge:
-    def __init__(self, on_entry, on_log, client_factory=None):
+    def __init__(self, on_entry, on_log, client_factory=None, on_activity=None):
         self.on_entry, self.on_log = on_entry, on_log
         self.client_factory = client_factory
+        self.on_activity = on_activity
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.thread = None
@@ -19,10 +20,11 @@ class DouyinBridge:
                      'members': 0, 'accepted': 0, 'skipped': 0, 'reconnects': 0,
                      'last_message': None, 'last_member': None}
         self.kinds = Counter()
+        self.skip_reasons = Counter()
 
     def snapshot(self):
         with self.lock:
-            return dict(self.data, message_types=dict(self.kinds))
+            return dict(self.data, message_types=dict(self.kinds), skip_reasons=dict(self.skip_reasons))
 
     def update(self, **fields):
         with self.lock:
@@ -39,6 +41,7 @@ class DouyinBridge:
             self.data.update(state='resolving', room='', error='', messages=0, members=0,
                              accepted=0, skipped=0, reconnects=0, last_message=None, last_member=None)
             self.kinds.clear()
+            self.skip_reasons.clear()
             self.thread = threading.Thread(target=self.run, args=(value,), daemon=True, name='douyin-bridge')
             self.thread.start()
 
@@ -96,7 +99,8 @@ class DouyinBridge:
             self.client = None
 
     def bind(self, client):
-        from douyin_ai_assist.douyin.douyin_pb2 import MemberMessage, ControlMessage
+        from douyin_ai_assist.douyin.douyin_pb2 import MemberMessage, ControlMessage, ChatMessage, GiftMessage, LikeMessage
+        from interactions import activity_payload
         def member(payload):
             event = MemberMessage()
             event.ParseFromString(payload)
@@ -107,7 +111,7 @@ class DouyinBridge:
             if identity:
                 self.on_entry(*identity)
             else:
-                self.record_result(False)
+                self.record_result(False, "missing_identity_or_non_entry")
         def control(payload):
             event = ControlMessage()
             event.ParseFromString(payload)
@@ -116,6 +120,19 @@ class DouyinBridge:
                 self.update(state='ended')
                 client._stop()
         client._parser._handlers = {'WebcastMemberMessage': member, 'WebcastControlMessage': control}
+        def activity_handler(message_type,kind):
+            def handle(payload):
+                event=message_type()
+                event.ParseFromString(payload)
+                data=activity_payload(event,kind)
+                if data and self.on_activity:
+                    self.on_activity(data)
+            return handle
+        client._parser._handlers.update({
+            'WebcastChatMessage': activity_handler(ChatMessage,'chat'),
+            'WebcastGiftMessage': activity_handler(GiftMessage,'gift'),
+            'WebcastLikeMessage': activity_handler(LikeMessage,'like'),
+        })
         original_parse = client._parser.parse
         def parse(raw_message, send_ack=None):
             from douyin_ai_assist.douyin.douyin_pb2 import PushFrame, Response
@@ -142,6 +159,15 @@ class DouyinBridge:
             opened(ws)
             self.update(state='connected', error='')
             self.on_log('抖音已连接，正在监听真实进房。')
+            opened_at = time.time()
+            def watchdog():
+                while not client._heartbeat_stop.wait(10):
+                    last = self.snapshot()['last_message'] or opened_at
+                    if time.time()-max(last,opened_at) > 90:
+                        self.update(state='reconnecting', error='90 秒没有收到直播消息，正在重连')
+                        client._stop()
+                        break
+            threading.Thread(target=watchdog,daemon=True,name='douyin-watchdog').start()
         client._on_open = on_open
         client._on_error = lambda ws, error: self.update(error=type(error).__name__+'：直播连接异常')
         closed = client._on_close
@@ -151,6 +177,8 @@ class DouyinBridge:
                 self.update(state='reconnecting')
         client._on_close = on_close
 
-    def record_result(self, accepted):
+    def record_result(self, accepted, reason=""):
         with self.lock:
             self.data['accepted' if accepted else 'skipped'] += 1
+            if not accepted:
+                self.skip_reasons[reason or 'unknown'] += 1
